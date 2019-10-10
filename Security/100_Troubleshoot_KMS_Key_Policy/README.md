@@ -13,5 +13,3 @@ In this hands-on learning activity, you will work with the AWS Key Management Se
 * An [AWS account](https://portal.aws.amazon.com/gp/aws/developer/registration/index.html) that you are able to use for testing, that is not used for production or other purposes.
 
 NOTE: You will be billed for any applicable AWS resources used if you complete this lab that are not covered in the [AWS Free Tier](https://aws.amazon.com/free/).
-
-## [Start the Lab!](Lab_Guide.md)

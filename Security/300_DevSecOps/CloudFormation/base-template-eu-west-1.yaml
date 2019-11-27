@@ -1,0 +1,691 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Adding the Sec to your DevSecOps Pipeline"
+
+Parameters:
+  LatestAmiId:
+    Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
+    Default: "/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2"
+
+Mappings:
+  InspectorRules:
+    eu-west-1:
+      Rule: arn:aws:inspector:eu-west-1:357557129151:rulespackage/0-ubA5XvBh
+Resources:
+  AutomationServiceRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - ssm.amazonaws.com
+        Version: "2012-10-17"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonSSMAutomationRole
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - iam:PassRole
+                Effect: Allow
+                Resource:
+                  - "*"
+            Version: "2012-10-17"
+          PolicyName: PassRole
+    Type: AWS::IAM::Role
+  BootstrapInstance:
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT30M
+    DependsOn:
+      - CodeCommitRepo
+      - SSMAutomationLaunchAndInstall
+      - SSMAutomationBakeAMI
+      - AutomationServiceRole
+    Metadata:
+      AWS::CloudFormation::Init:
+        CleanupAutomationDocument:
+          commands:
+            InstallPackages:
+              command: sudo -u ec2-user /tmp/cleanup_automation_document.sh
+          files:
+            /tmp/cleanup_automation_document.sh:
+              content: !Join
+                - ""
+                - - export AWS_DEFAULT_REGION=
+                  - !Ref "AWS::Region"
+                  - "\n"
+                  - "aws ssm get-document --name "
+                  - !Ref "SSMAutomationLaunchAndInstall"
+                  - ' --document-version "\$LATEST" | jq ''.Content|fromjson'' > /tmp/automation_document.json'
+                  - "\n"
+                  - "aws ssm update-document --name "
+                  - !Ref "SSMAutomationLaunchAndInstall"
+                  - ' --content file:///tmp/automation_document.json --document-version
+                    "\$LATEST"'
+                  - "\n"
+                  - "aws ssm update-document-default-version --name "
+                  - !Ref "SSMAutomationLaunchAndInstall"
+                  - " --document-version \"2\"\n"
+                  - "aws ssm get-document --name "
+                  - !Ref "SSMAutomationBakeAMI"
+                  - ' --document-version "\$LATEST" | jq ''.Content|fromjson'' > /tmp/automation_document.json'
+                  - "\n"
+                  - "aws ssm update-document --name "
+                  - !Ref "SSMAutomationBakeAMI"
+                  - ' --content file:///tmp/automation_document.json --document-version
+                    "\$LATEST"'
+                  - "\n"
+                  - "aws ssm update-document-default-version --name "
+                  - !Ref "SSMAutomationBakeAMI"
+                  - " --document-version \"2\"\n"
+              group: root
+              mode: "000755"
+              owner: root
+        ConfigureGit:
+          commands:
+            ConfigureGit:
+              command: sudo -u ec2-user /tmp/configure_git.sh
+              cwd: /home/ec2-user
+          files:
+            /tmp/configure_git.sh:
+              content: !Join
+                - ""
+                - - "git config --global credential.helper '!aws codecommit credential-helper\
+                    \ $@'\n"
+                  - "git config --global credential.UseHttpPath true\n"
+                  - "git config --global user.name \"AWS Student\"\n"
+                  - "git config --global user.email awsstudent@qwiklab.com\n"
+                  - "git clone "
+                  - !GetAtt "CodeCommitRepo.CloneUrlHttp"
+                  - "\n"
+              group: root
+              mode: "000755"
+              owner: root
+        InitialCommit:
+          commands:
+            InitialCommit:
+              command: sudo -u ec2-user /tmp/initial_commit.sh
+              cwd: /home/ec2-user/DevSecOpsLab
+          files:
+            /home/ec2-user/DevSecOpsLab/config.json:
+              content: !Join
+                - ""
+                - - "{\n"
+                  - !Sub
+                    - "\t\"InspectorTemplateArn\": \"${InspectorAssessmentTemplateArn}\"\
+                      ,\n"
+                    - InspectorAssessmentTemplateArn: !GetAtt "InspectorAssessmentTemplate.Arn"
+                  - "\t\"CodeCommit\": {\n"
+                  - "\t\t\"RepoName\": \"DevSecOpsLab\",\n"
+                  - !Sub
+                    - "\t\t\"CloneURL\": \"${CodeCommitCloneUrl}\"\n"
+                    - CodeCommitCloneUrl: !GetAtt "CodeCommitRepo.CloneUrlHttp"
+                  - "\t},\n"
+                  - "\t\"SSMAutomation\": {\n"
+                  - !Sub
+                    - "\t\t\"AutomationRole\": \"${AutomationServiceRoleArn}\",\n"
+                    - AutomationServiceRoleArn: !GetAtt "AutomationServiceRole.Arn"
+                  - "\t\t\"SSMDocuments\": {\n"
+                  - !Sub "\t\t\t\"LaunchAndInstall\": \"${SSMAutomationLaunchAndInstall}\"\
+                    ,\n"
+                  - !Sub "\t\t\t\"TerminateAndBake\": \"${SSMAutomationBakeAMI}\"\n"
+                  - "\t\t},\n"
+                  - "\t\t\"Instance\": {\n"
+                  - !Sub "\t\t\t\"InstanceProfile\": \"${EC2SSMAutomationRoleInstanceProfile}\"\
+                    ,\n"
+                  - !Sub
+                    - "\t\t\t\"SourceAmiId\": \"${RegionAMI}\",\n"
+                    - RegionAMI: !Ref LatestAmiId
+                  - !Sub "\t\t\t\"SubnetId\": \"${Subnet}\",\n"
+                  - "\t\t\t\"InstanceType\": \"t2.small\",\n"
+                  - "\t\t\t\"InstallScript\": \"install_software.sh\",\n\t\t\t\"NameTag\"\
+                    : \"TempBaking\"\n"
+                  - "\t\t}\n"
+                  - "\t  },\n"
+                  - "\t\"InstallInspectorAgent\": \"true\"\n"
+                  - "}"
+              group: ec2-user
+              mode: "000644"
+              owner: ec2-user
+            /tmp/initial_commit.sh:
+              content: !Join
+                - ""
+                - - "curl -o install_software.zip https://mr10sd.s3-eu-west-1.amazonaws.com/install_software.zip\n"
+                  - "unzip install_software.zip\n"
+                  - "rm install_software.zip\ngit add -A .\n"
+                  - "git commit -m 'Initial Commit'\n"
+                  - "git push\n"
+              group: root
+              mode: "000755"
+              owner: root
+        InstallPackages:
+          commands:
+            InstallPackages:
+              command: yum install -y git jq
+        configSets:
+          Bootstrap:
+            - InstallPackages
+            - CleanupAutomationDocument
+            - ConfigureGit
+            - InitialCommit
+    Properties:
+      IamInstanceProfile: !Ref "EC2BootstrapRole"
+      ImageId: !Ref LatestAmiId
+      InstanceType: t2.micro
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: "true"
+          DeleteOnTermination: "true"
+          Description: Static IP ENI for the Bootstrap instnace so we can portscan
+          DeviceIndex: "0"
+          GroupSet:
+            - !Ref "BootstrapSecurityGroup"
+          PrivateIpAddress: 10.0.0.10
+          SubnetId: !Ref "Subnet"
+      Tags:
+        - Key: Name
+          Value: DevSecOpsLab-Bootstrap
+      UserData: !Base64
+        Fn::Join:
+          - ""
+          - - "#!/bin/bash\n"
+            - "/opt/aws/bin/cfn-init -v -s "
+            - !Ref "AWS::StackName"
+            - " -r BootstrapInstance -c Bootstrap --region "
+            - !Ref "AWS::Region"
+            - "\n"
+            - "/opt/aws/bin/cfn-signal -e $? --stack "
+            - !Ref "AWS::StackName"
+            - " --resource BootstrapInstance --region "
+            - !Ref "AWS::Region"
+            - "\n"
+    Type: AWS::EC2::Instance
+  BootstrapSecurityGroup:
+    Properties:
+      GroupDescription: Bootstrap Instance Security Group Ingress on SSH
+      SecurityGroupIngress:
+        - CidrIp: "0.0.0.0/0"
+          FromPort: "22"
+          IpProtocol: tcp
+          ToPort: "22"
+      VpcId: !Ref "VPC"
+    Type: AWS::EC2::SecurityGroup
+  BuildProject:
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+          - Name: APP_NAME
+            Value: DevSecOpsLabApp
+        Image: aws/codebuild/nodejs:8.11.0
+        Type: LINUX_CONTAINER
+      Name: DevSecOpsLabApp
+      ServiceRole: !Ref "CodeBuildServiceRole"
+      Source:
+        Type: CODEPIPELINE
+    Type: AWS::CodeBuild::Project
+  CodeBuildServiceRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+        Version: "2012-10-17"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCodeBuildDeveloperAccess
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - iam:PassRole
+                Effect: Allow
+                Resource:
+                  - "*"
+            Version: "2012-10-17"
+          PolicyName: PassRole
+    Type: AWS::IAM::Role
+  CodeCommitRepo:
+    Properties:
+      RepositoryDescription: DevSecOpsLab Repository
+      RepositoryName: DevSecOpsLab
+    Type: AWS::CodeCommit::Repository
+  CodePipelineRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+        Version: "2012-10-17"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCodePipelineFullAccess
+        - arn:aws:iam::aws:policy/AWSCodeCommitFullAccess
+        - arn:aws:iam::aws:policy/AWSLambdaFullAccess
+        - arn:aws:iam::aws:policy/AWSCodeBuildDeveloperAccess
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - kms:DescribeKey
+                  - kms:GenerateDataKey*
+                  - kms:Encrypt
+                  - kms:ReEncrypt*
+                  - kms:Decrypt
+                Effect: Allow
+                Resource:
+                  - !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:alias/aws/codecommit"
+            Version: "2012-10-17"
+          PolicyName: !Sub "${AWS::StackName}DevSecOpsLabUseKMS"
+    Type: AWS::IAM::Role
+  DefaultRoute:
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref "IGW"
+      RouteTableId: !Ref "RouteTable"
+    Type: AWS::EC2::Route
+  EC2BootstrapRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+        Version: "2012-10-17"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+        - arn:aws:iam::aws:policy/AWSCodeCommitPowerUser
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - ssm:UpdateDocumentDefaultVersion
+                  - ssm:UpdateDocument
+                  - iam:passrole
+                Effect: Allow
+                Resource:
+                  - "*"
+            Version: "2012-10-17"
+          PolicyName: UpdateSSM
+    Type: AWS::IAM::Role
+  EC2BootstrapRolenIstanceProfile:
+    Properties:
+      InstanceProfileName: !Ref "EC2BootstrapRole"
+      Roles:
+        - !Ref "EC2BootstrapRole"
+    Type: AWS::IAM::InstanceProfile
+  EC2SSMAutomationRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+        Version: "2012-10-17"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM
+        - arn:aws:iam::aws:policy/AWSCodeCommitPowerUser
+    Type: AWS::IAM::Role
+  EC2SSMAutomationRoleInstanceProfile:
+    Properties:
+      InstanceProfileName: !Ref "EC2SSMAutomationRole"
+      Roles:
+        - !Ref "EC2SSMAutomationRole"
+    Type: AWS::IAM::InstanceProfile
+  IGW:
+    Type: AWS::EC2::InternetGateway
+  IGWAttach:
+    Properties:
+      InternetGatewayId: !Ref "IGW"
+      VpcId: !Ref "VPC"
+    Type: AWS::EC2::VPCGatewayAttachment
+  InspectorAssessmentTarget:
+    Properties:
+      ResourceGroupArn: !Ref "InspectorResourceGroup"
+    Type: AWS::Inspector::AssessmentTarget
+  InspectorAssessmentTemplate:
+    Properties:
+      AssessmentTargetArn: !Ref "InspectorAssessmentTarget"
+      DurationInSeconds: 60
+      RulesPackageArns:
+        - !FindInMap
+          - InspectorRules
+          - !Ref "AWS::Region"
+          - Rule
+    Type: AWS::Inspector::AssessmentTemplate
+  InspectorResourceGroup:
+    Properties:
+      ResourceGroupTags:
+        - Key: InspectorCandidate
+          Value: "True"
+    Type: AWS::Inspector::ResourceGroup
+  LambdaExecuteAutomationRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+        Version: "2012-10-17"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCodePipelineCustomActionAccess
+        - arn:aws:iam::aws:policy/service-role/AmazonSSMAutomationRole
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - iam:PassRole
+                Effect: Allow
+                Resource:
+                  - "*"
+            Version: "2012-10-17"
+          PolicyName: PassRole
+    Type: AWS::IAM::Role
+  LambdaRunInspectorRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+        Version: "2012-10-17"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonInspectorFullAccess
+        - arn:aws:iam::aws:policy/AWSCodePipelineCustomActionAccess
+        - arn:aws:iam::aws:policy/service-role/AmazonSSMAutomationRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - iam:PassRole
+                Effect: Allow
+                Resource:
+                  - "*"
+            Version: "2012-10-17"
+          PolicyName: PassRole
+    Type: AWS::IAM::Role
+  LaunchAutomationDocumentLambda:
+    Properties:
+      Code:
+        S3Bucket: "mr10sd"
+        S3Key: "lambda_launch_automation_document.zip"
+      Description: Pipeline Stage to launch an automation document
+      FunctionName: !Sub "${AWS::StackName}-LaunchAutomationDocument"
+      Handler: lambda_launch_automation_document.lambda_handler
+      MemorySize: 128
+      Role: !GetAtt "LambdaExecuteAutomationRole.Arn"
+      Runtime: python2.7
+      Timeout: "10"
+    Type: AWS::Lambda::Function
+  LaunchRunInspectorLambda:
+    Properties:
+      Code:
+        S3Bucket: "mr10sd"
+        S3Key: "lambda_run_inspector.zip"
+      Description: Pipeline Stage to run Inspector against baking instances
+      FunctionName: !Sub "${AWS::StackName}-LaunchRunInspector"
+      Handler: lambda_run_inspector.lambda_handler
+      MemorySize: 128
+      Role: !GetAtt "LambdaRunInspectorRole.Arn"
+      Runtime: python2.7
+      Timeout: "10"
+    Type: AWS::Lambda::Function
+  RouteTable:
+    Properties:
+      VpcId: !Ref "VPC"
+    Type: AWS::EC2::RouteTable
+  RouteTableAssociate:
+    Properties:
+      RouteTableId: !Ref "RouteTable"
+      SubnetId: !Ref "Subnet"
+    Type: AWS::EC2::SubnetRouteTableAssociation
+  DevSecOpsLabCodePipelineBucket:
+    Type: AWS::S3::Bucket
+  SSMAutomationBakeAMI:
+    Properties:
+      Content:
+        assumeRole: "{{AutomationAssumeRole}}"
+        description: ""
+        mainSteps:
+          - action: aws:branch
+            inputs:
+              Choices:
+                - NextStep: stopInstance
+                  StringEquals: "true"
+                  Variable: "{{CreateAMI}}"
+                - NextStep: terminateInstance
+                  StringEquals: "false"
+                  Variable: "{{CreateAMI}}"
+              Default: terminateInstance
+            name: createImageDecision
+          - action: aws:changeInstanceState
+            inputs:
+              DesiredState: stopped
+              InstanceIds:
+                - "{{RunningInstanceID}}"
+            maxAttempts: 3
+            name: stopInstance
+            onFailure: Abort
+            timeoutSeconds: 1200
+          - action: aws:createImage
+            inputs:
+              ImageDescription:
+                "DevSecOpsLab Application AMI Generated on: {{global:DATE_TIME}}
+                from source AMI: {{SourceAmiId}}"
+              ImageName: "{{TargetAmiName}}"
+              InstanceId: "{{RunningInstanceID}}"
+              NoReboot: true
+            maxAttempts: 3
+            name: createImage
+            onFailure: Abort
+          - action: aws:changeInstanceState
+            inputs:
+              DesiredState: terminated
+              InstanceIds:
+                - "{{RunningInstanceID}}"
+            maxAttempts: 3
+            name: terminateInstance
+            onFailure: Continue
+        outputs:
+          - createImage.ImageId
+        parameters:
+          AutomationAssumeRole:
+            default: arn:aws:iam::{{global:ACCOUNT_ID}}:role/AutomationServiceRole
+            description:
+              (Required) The ARN of the role that allows Automation to
+              perform the actions on your behalf.
+            type: String
+          CreateAMI:
+            description: (Required) whether the instance should have an AMI created
+            type: String
+          RunningInstanceID:
+            description:
+              (Required) ID of the running EC2 Instance to terminate and
+              Snapshot.
+            type: String
+          SourceAmiId:
+            description: (Required) The source Amazon Machine Image ID.
+            type: String
+          TargetAmiName:
+            default: DevSecOpsLab_Application_AMI_From_{{SourceAmiId}}_on_{{global:DATE_TIME}}
+            description:
+              (Optional) The name of the new AMI that will be created.
+              Default is a system-generated string including the source AMI id, and
+              the creation time and date.
+            type: String
+        schemaVersion: "0.3"
+      DocumentType: Automation
+    Type: AWS::SSM::Document
+  SSMAutomationLaunchAndInstall:
+    Properties:
+      Content:
+        assumeRole: "{{AutomationAssumeRole}}"
+        description: ""
+        mainSteps:
+          - action: aws:runInstances
+            inputs:
+              IamInstanceProfileName: "{{InstanceIamRole}}"
+              ImageId: "{{SourceAmiId}}"
+              InstanceType: "{{InstanceType}}"
+              MaxInstanceCount: 1
+              MinInstanceCount: 1
+              SubnetId: "{{SubnetId}}"
+              TagSpecifications:
+                - ResourceType: instance
+                  Tags:
+                    - Key: Name
+                      Value: "{{InstanceNameTag}}"
+                    - Key: InspectorCandidate
+                      Value: "True"
+            maxAttempts: 3
+            name: launchInstance
+            onFailure: Abort
+            timeoutSeconds: 1200
+          - action: aws:branch
+            inputs:
+              Choices:
+                - NextStep: installInspector
+                  StringEquals: "true"
+                  Variable: "{{InstallInspector}}"
+                - NextStep: InstallSoftware
+                  StringEquals: "false"
+                  Variable: "{{InstallInspector}}"
+              Default: installInspector
+            name: installInspectorDecision
+          - action: aws:runCommand
+            inputs:
+              DocumentName: AmazonInspector-ManageAWSAgent
+              InstanceIds:
+                - "{{launchInstance.InstanceIds}}"
+              Parameters:
+                Operation:
+                  - Install
+            maxAttempts: 3
+            name: installInspector
+            onFailure: Abort
+            timeoutSeconds: 3600
+          - action: aws:runCommand
+            inputs:
+              DocumentName: AWS-RunShellScript
+              InstanceIds:
+                - "{{launchInstance.InstanceIds}}"
+              Parameters:
+                commands:
+                  - set -e
+                  - source /etc/bashrc
+                  - export HOME=/root
+                  - cd $HOME
+                  - aws s3 cp s3://{{BuildArtifactBucket}}/{{BuildArtifactKey}} build_output.zip
+                  - unzip -o build_output.zip
+                  - chmod +x {{InstallScript}}
+                  - cp needs_reboot.sh /tmp/needs_reboot.sh
+                  - ./{{InstallScript}}
+            maxAttempts: 1
+            name: InstallSoftware
+            onFailure: Abort
+            timeoutSeconds: 3600
+          - action: aws:runCommand
+            inputs:
+              DocumentName: AWS-RunShellScript
+              InstanceIds:
+                - "{{launchInstance.InstanceIds}}"
+              Parameters:
+                commands:
+                  - /bin/bash /tmp/needs_reboot.sh 2>&1 > /tmp/needs_reboot_out.txt
+            maxAttempts: 1
+            name: CheckForRestart
+            onFailure: Abort
+            timeoutSeconds: 3600
+        outputs:
+          - launchInstance.InstanceIds
+        parameters:
+          AutomationAssumeRole:
+            default: arn:aws:iam::{{global:ACCOUNT_ID}}:role/AutomationServiceRole
+            description:
+              (Required) The ARN of the role that allows Automation to
+              perform the actions on your behalf.
+            type: String
+          BuildArtifactBucket:
+            description: (Required) Bucket containing our build artifact to install
+            type: String
+          BuildArtifactKey:
+            description:
+              (Required) Key in the Build Bucket to find then zip file
+              of our build artifact
+            type: String
+          GitCloneURL:
+            description:
+              (Required) Clone URL of the Git repostiory to get our code
+              from
+            type: String
+          GitRepoName:
+            default: all
+            description: (Required) Name of the Git repository
+            type: String
+          InstallInspector:
+            description: (Required) whether the inspector agent should be installed
+            type: String
+          InstallScript:
+            description:
+              (Required) Name of the installation script at the root of
+              the git repository to install software.
+            type: String
+          InstanceIamRole:
+            default: ManagedInstanceProfile
+            description:
+              (Required) The name of the role that enables Systems Manager
+              (SSM) to manage the instance.
+            type: String
+          InstanceNameTag:
+            default: AMIBakery
+            description: (Optional) Name Tag for the instances launched that are baked
+            type: String
+          InstanceType:
+            default: t2.micro
+            description:
+              (Optional) Type of instance to launch as the workspace host.
+              Instance types vary by region. Default is t2.micro.
+            type: String
+          SourceAmiId:
+            description: (Required) The source Amazon Machine Image ID.
+            type: String
+          SubnetId:
+            description: (Required) The Subnet ID to launch the instance in
+            type: String
+        schemaVersion: "0.3"
+      DocumentType: Automation
+    Type: AWS::SSM::Document
+  Subnet:
+    Properties:
+      CidrBlock: 10.0.0.0/24
+      MapPublicIpOnLaunch: "true"
+      VpcId: !Ref "VPC"
+    Type: AWS::EC2::Subnet
+  VPC:
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: "true"
+      Tags:
+        - Key: Name
+          Value: DevSecOpsLab-VPC
+    Type: AWS::EC2::VPC

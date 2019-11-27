@@ -1,0 +1,27 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      # We use NodeJS 8.11.0 in CodeBuild project
+      - node -e "console.log('Running Node.js ' + process.version)"
+
+  pre_build:
+    commands:
+      - echo "Prebuild"
+
+  build:
+    commands:
+      - echo "Build"
+      - cd app
+      - rm -rf node_modules
+      - npm install
+      - npm run build
+      - cd ..
+
+artifacts:
+  files:
+    - '*'
+    - 'app/*'
+    - 'app/build/**/*'
+

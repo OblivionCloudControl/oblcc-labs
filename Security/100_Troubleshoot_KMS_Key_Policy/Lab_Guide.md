@@ -39,9 +39,9 @@ Click Finish.
 
 ### 2. Configure the Encryption Key for Users
 
-Click mykey.
+* Click mykey.
 
-Under Key Users, click Add.
+* Under Key Users, click Add.
 
 Select the checkbox next to user-1.
 

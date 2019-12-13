@@ -55,56 +55,52 @@ Paste a copy to the end of permissions.
 
 ### 3. Create a Bucket Using the Key and Upload an Object
 
-Select Services from the top menu bar.
+* Select Services from the top menu bar.
 
-Select S3.
+* Select S3.
 
-Click + Create bucket
+* Click + Create bucket
 
-Under Bucket name enter "mybucket" with several random numbers afterward to ensure uniqueness.
+* Under Bucket name enter "mybucket" with several random numbers afterward to ensure uniqueness.
 
-Select Default encryption.
+* Select Default encryption.
 
-Select AWS-KMS.
+* Select AWS-KMS.
 
-From the dropdown, select mykey.
+* From the dropdown, select mykey.
 
-Click Create bucket.
+* Click Create bucket.
 
-Click on the bucket name.
+* Click on the bucket name.
 
-Click the Upload button.
+* Click the Upload button.
 
-Click Add files and select any file from your local drive.
+* Click Add files and select any file from your local drive.
 
-Select a file to upload.
+* Select a file to upload.
 
 ### 4. Test the Policy
 
-Log out of the AWS Console.
+* Log out of the AWS Console.
 
-Log back into AWS using the user-1 credentials you created
+* Log back into AWS using the user-1 credentials you created
 
-Click S3.
+* Click S3.
 
-Click the bucket name.
+* Click the bucket name.
 
-Click the uploaded file.
+* Click the uploaded file.
 
-Click the Download button and verify the download works.
+* Click the Download button and verify the download works.
 
-Log out of the AWS Console.
+* Log out of the AWS Console.
 
-Log back into AWS using the user-2 credentials you created
+* Log back into AWS using the user-2 credentials you created
 
-Click S3.
+* Click S3.
 
-Click the bucket name.
+* Click the bucket name.
 
-Click the uploaded file.
+* Click the uploaded file.
 
-Click the Download button and verify you receive an access denied message.
-
-### 5. Conclusion
-
-Congratulations — you've completed this hands-on lab!
+* Click the Download button and verify you receive an access denied message.
